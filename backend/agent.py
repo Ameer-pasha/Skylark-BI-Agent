@@ -1,8 +1,14 @@
 # backend/agent.py
 """
-Claude-powered conversational agent with tool-calling loop.
-Uses Anthropic's tool_use feature — no LangGraph needed.
-Includes an intelligent fallback mode when running without an API key or offline.
+Conversational agent with tool-calling support for both Anthropic Claude and xAI Grok.
+- Uses Anthropic's tool_use API when LLM_PROVIDER=anthropic / claude
+- Uses xAI Grok via OpenAI-compatible API (https://api.x.ai/v1) when LLM_PROVIDER=grok / xai
+- Auto-detects provider based on available API keys if LLM_PROVIDER=auto
+- Includes an intelligent fallback mode when running without an API key or offline.
+
+Grok tool-calling is implemented via the `openai` SDK with `base_url="https://api.x.ai/v1"`,
+matching xAI's OpenAI-compatible endpoint. Tool schemas are translated to OpenAI function
+format while reusing the same TOOL_FUNCTIONS dispatch map.
 """
 
 import os
@@ -15,10 +21,10 @@ from backend.tools import TOOL_FUNCTIONS
 load_dotenv()
 
 # ─────────────────────────────────────────────
-# Tool schemas (tells Claude what tools exist)
+# Tool schemas - Anthropic Claude format
 # ─────────────────────────────────────────────
 
-TOOLS = [
+TOOLS_CLAUDE = [
     {
         "name": "query_deals",
         "description": (
@@ -100,6 +106,104 @@ TOOLS = [
     }
 ]
 
+# Backward-compat alias
+TOOLS = TOOLS_CLAUDE
+
+# ─────────────────────────────────────────────
+# Tool schemas - OpenAI / xAI Grok format
+# ─────────────────────────────────────────────
+
+TOOLS_OPENAI = [
+    {
+        "type": "function",
+        "function": {
+            "name": "query_deals",
+            "description": (
+                "Query and analyze the Deals/Pipeline board from monday.com. "
+                "Use this for questions about sales pipeline, deal values, sectors, "
+                "win rates, deal stages, or revenue forecasts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sector": {
+                        "type": "string",
+                        "description": "Filter by industry sector (e.g., 'Energy', 'Defence', 'Agriculture')"
+                    },
+                    "stage": {
+                        "type": "string",
+                        "description": "Filter by deal stage (e.g., 'Proposal', 'Negotiation', 'Closed Won')"
+                    },
+                    "quarter": {
+                        "type": "string",
+                        "description": "Filter by quarter: 'Q1', 'Q2', 'Q3', or 'Q4'"
+                    },
+                    "year": {
+                        "type": "integer",
+                        "description": "Filter by year (e.g., 2026)"
+                    },
+                    "metric": {
+                        "type": "string",
+                        "enum": ["summary", "by_sector", "by_stage", "total_value", "win_rate"],
+                        "description": "Type of analysis to perform"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_work_orders",
+            "description": (
+                "Query and analyze the Work Orders / Execution board from monday.com. "
+                "Use this for questions about operational work, project status, delivery timelines, "
+                "overdue orders, invoicing, or client-level execution data."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": "Filter by work order status (e.g., 'In Progress', 'Completed', 'On Hold')"
+                    },
+                    "sector": {
+                        "type": "string",
+                        "description": "Filter by sector"
+                    },
+                    "client": {
+                        "type": "string",
+                        "description": "Filter by client name"
+                    },
+                    "metric": {
+                        "type": "string",
+                        "enum": ["summary", "by_status", "by_sector", "overdue", "revenue"],
+                        "description": "Type of analysis to perform"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_leadership_summary",
+            "description": (
+                "Generate a structured executive/leadership summary combining pipeline "
+                "and execution data. Use when user asks for 'weekly summary', 'leadership update', "
+                "'board report', or an overview of the full business."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    }
+]
+
 
 # ─────────────────────────────────────────────
 # System Prompt
@@ -137,18 +241,86 @@ YOUR BEHAVIOR RULES:
 """
 
 
+# ─────────────────────────────────────────────
+# Provider helpers
+# ─────────────────────────────────────────────
+
+_PLACEHOLDER_KEYS = {"", "your_anthropic_api_key_here", "your_xai_api_key_here", "mock", "test", "placeholder"}
+
+
+def _is_valid_key(value: str) -> bool:
+    if not value:
+        return False
+    v = value.strip()
+    if not v or v.lower() in _PLACEHOLDER_KEYS:
+        return False
+    # xAI keys typically start with xai- ; Anthropic with sk-ant-
+    # but accept any non-placeholder lengthy string
+    return len(v) > 10
+
+
+def _get_anthropic_key() -> str:
+    return (os.getenv("ANTHROPIC_API_KEY") or "").strip()
+
+
+def _get_xai_key() -> str:
+    # Support XAI_API_KEY, GROK_API_KEY, XAI_KEY for flexibility
+    for env_key in ["XAI_API_KEY", "GROK_API_KEY", "XAI_KEY"]:
+        val = os.getenv(env_key, "").strip()
+        if _is_valid_key(val):
+            return val
+    # Fallback to raw fetch to allow placeholder detection
+    return (os.getenv("XAI_API_KEY") or os.getenv("GROK_API_KEY") or "").strip()
+
+
+def _get_llm_provider() -> str:
+    """
+    Resolve LLM provider.
+
+    Env LLM_PROVIDER values:
+      - anthropic / claude -> force Claude
+      - grok / xai / x-ai -> force Grok
+      - auto (default) -> auto-detect based on available valid keys
+
+    Auto-detect precedence:
+      1. If only one provider has a valid key, use it
+      2. If both have valid keys, respect explicit LLM_PROVIDER, else default to anthropic
+      3. If none, return 'mock'
+    """
+    raw = (os.getenv("LLM_PROVIDER") or "auto").strip().lower()
+    has_anthropic = _is_valid_key(_get_anthropic_key())
+    has_xai = _is_valid_key(_get_xai_key())
+
+    # Explicit forced providers
+    if raw in ("grok", "xai", "x-ai", "xai_grok"):
+        return "grok" if has_xai else ("mock" if not has_anthropic else "anthropic")
+    if raw in ("anthropic", "claude"):
+        return "anthropic" if has_anthropic else ("mock" if not has_xai else "grok")
+    if raw in ("openai",):
+        # Treat openai as grok-compatible via xAI endpoint if XAI key present
+        return "grok" if has_xai else "mock"
+
+    # Auto mode
+    if has_xai and not has_anthropic:
+        return "grok"
+    if has_anthropic and not has_xai:
+        return "anthropic"
+    if has_xai and has_anthropic:
+        # Both present -> default to anthropic unless provider explicitly says grok
+        # but if LLM_PROVIDER is auto, prefer anthropic for backward compat
+        return "anthropic"
+    return "mock"
+
+
 def _is_mock_ai_mode() -> bool:
-    """Check if we should use local fallback agent instead of live Anthropic API."""
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key or api_key in ["your_anthropic_api_key_here", "mock", "test", ""]:
-        return True
-    return False
+    """Check if we should use local fallback agent instead of live LLM API."""
+    return _get_llm_provider() == "mock"
 
 
 def _local_fallback_agent(user_message: str, conversation_history: list[dict]) -> str:
     """
     Intelligent rule-based fallback agent that invokes tools and formats high-quality BI responses
-    with insights, caveats, and clarifying questions when no Anthropic API key is present.
+    with insights, caveats, and clarifying questions when no LLM API key is present.
     """
     msg = user_message.lower()
     insights = []
@@ -257,69 +429,43 @@ def _local_fallback_agent(user_message: str, conversation_history: list[dict]) -
 
 
 # ─────────────────────────────────────────────
-# Main Agent Function
+# Claude runner
 # ─────────────────────────────────────────────
 
-def run_agent(user_message: str, conversation_history: list[dict]) -> str:
-    """
-    Run the Claude tool-calling agent loop.
-    
-    conversation_history: list of {"role": "user"/"assistant", "content": "..."}
-    Returns final text response as string.
-    
-    Flow:
-    1. Send user message + history to Claude
-    2. If Claude returns tool_use → execute tool → feed result back → repeat
-    3. When Claude returns final text → return it
-    """
-    if _is_mock_ai_mode():
-        print("[agent] Mock AI mode active (no valid ANTHROPIC_API_KEY). Using local fallback BI agent.")
-        return _local_fallback_agent(user_message, conversation_history)
-
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+def _run_claude_agent(user_message: str, conversation_history: list[dict]) -> str:
+    api_key = _get_anthropic_key()
     client = Anthropic(api_key=api_key)
     model_name = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
 
-    # Build messages list (history + new user message)
     messages = conversation_history + [{"role": "user", "content": user_message}]
-
-    max_iterations = 5  # Prevent infinite loops
+    max_iterations = 5
     iteration = 0
 
     while iteration < max_iterations:
         iteration += 1
-
         try:
-            # ── Call Claude ──
             response = client.messages.create(
                 model=model_name,
                 max_tokens=2048,
                 system=SYSTEM_PROMPT,
-                tools=TOOLS,
+                tools=TOOLS_CLAUDE,
                 messages=messages
             )
         except Exception as e:
-            print(f"[agent] Anthropic API call failed: {e}. Falling back to local BI agent.")
+            print(f"[agent:claude] Anthropic API call failed: {e}. Falling back to local BI agent.")
             return _local_fallback_agent(user_message, conversation_history)
 
-        # ── Check stop reason ──
         if response.stop_reason == "end_turn":
-            # Claude is done — extract text response
             text_blocks = [block.text for block in response.content if hasattr(block, "text")]
             return "\n".join(text_blocks)
 
         elif response.stop_reason == "tool_use":
-            # Claude wants to call tool(s) — execute them
             tool_results = []
-
             for block in response.content:
                 if block.type == "tool_use":
                     tool_name = block.name
                     tool_input = block.input
-
-                    print(f"[agent] Tool called: {tool_name} with input: {tool_input}")
-
-                    # Execute the tool
+                    print(f"[agent:claude] Tool called: {tool_name} with input: {tool_input}")
                     if tool_name in TOOL_FUNCTIONS:
                         try:
                             tool_result = TOOL_FUNCTIONS[tool_name](**tool_input)
@@ -327,20 +473,176 @@ def run_agent(user_message: str, conversation_history: list[dict]) -> str:
                             tool_result = f"Error executing {tool_name}: {str(e)}"
                     else:
                         tool_result = f"Unknown tool: {tool_name}"
-
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
                         "content": tool_result
                     })
-
-            # Add Claude's response (with tool_use blocks) to messages
             messages.append({"role": "assistant", "content": response.content})
-            # Add tool results for Claude to process
             messages.append({"role": "user", "content": tool_results})
-
         else:
-            # Unexpected stop reason
             return f"Agent stopped unexpectedly: {response.stop_reason}"
 
     return "I reached the maximum reasoning steps. Please try a more specific question."
+
+
+# ─────────────────────────────────────────────
+# Grok (xAI) runner - OpenAI-compatible
+# ─────────────────────────────────────────────
+
+def _run_grok_agent(user_message: str, conversation_history: list[dict]) -> str:
+    """
+    Run Grok via xAI's OpenAI-compatible API.
+
+    Uses `openai` SDK with base_url="https://api.x.ai/v1".
+    Implements the same tool-calling loop as Claude but with OpenAI semantics:
+      - tools -> `tools` with `type: function`
+      - tool_calls -> execute -> append `tool` role messages -> loop
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        print("[agent:grok] openai package not installed. Falling back to local BI agent. Install with `pip install openai`.")
+        return _local_fallback_agent(user_message, conversation_history)
+
+    api_key = _get_xai_key()
+    # XAI_MODEL / GROK_MODEL / ANTHROPIC_MODEL fallback chain
+    model_name = (
+        os.getenv("XAI_MODEL")
+        or os.getenv("GROK_MODEL")
+        or os.getenv("ANTHROPIC_MODEL")  # allow reusing generic var
+        or "grok-3"
+    )
+    # Allow overriding base URL (useful for testing / mocks)
+    base_url = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
+
+    client = OpenAI(api_key=api_key, base_url=base_url)
+
+    # Build OpenAI messages: system + history + new user message
+    # conversation_history is list of {"role": "...", "content": "..."}
+    # Normalize roles: OpenAI supports system/user/assistant/tool
+    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for m in conversation_history:
+        # Pass through tool messages if present (for multi-turn)
+        if m.get("role") in ("user", "assistant", "system", "tool"):
+            messages.append(m)
+        else:
+            # Coerce unknown roles to user
+            messages.append({"role": "user", "content": m.get("content", "")})
+    messages.append({"role": "user", "content": user_message})
+
+    max_iterations = 5
+    iteration = 0
+
+    while iteration < max_iterations:
+        iteration += 1
+        try:
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                tools=TOOLS_OPENAI,
+                tool_choice="auto",
+                temperature=0.2,
+                max_tokens=2048,
+            )
+        except Exception as e:
+            print(f"[agent:grok] xAI API call failed (model={model_name} base_url={base_url}): {e}. Falling back to local BI agent.")
+            return _local_fallback_agent(user_message, conversation_history)
+
+        choice = response.choices[0]
+        message = choice.message
+
+        # If no tool calls, return content directly
+        if not message.tool_calls:
+            # Handle None content gracefully
+            content = message.content or ""
+            # Append to history for completeness
+            messages.append({"role": "assistant", "content": content})
+            return content
+
+        # Tool calls requested -> execute each
+        # First, append the assistant message with tool_calls
+        messages.append({
+            "role": "assistant",
+            "content": message.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments
+                    }
+                } for tc in message.tool_calls
+            ]
+        })
+
+        for tc in message.tool_calls:
+            tool_name = tc.function.name
+            raw_args = tc.function.arguments or "{}"
+            try:
+                tool_input = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                if not isinstance(tool_input, dict):
+                    tool_input = {}
+            except json.JSONDecodeError:
+                print(f"[agent:grok] Failed to parse tool arguments: {raw_args}")
+                tool_input = {}
+
+            print(f"[agent:grok] Tool called: {tool_name} with input: {tool_input}")
+
+            if tool_name in TOOL_FUNCTIONS:
+                try:
+                    tool_result = TOOL_FUNCTIONS[tool_name](**tool_input)
+                except Exception as e:
+                    tool_result = f"Error executing {tool_name}: {str(e)}"
+            else:
+                tool_result = f"Unknown tool: {tool_name}"
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": tool_result
+            })
+
+        # Loop will make next completion with tool results injected
+        # If finish_reason is stop after tool handling, loop continues
+
+    return "I reached the maximum reasoning steps. Please try a more specific question."
+
+
+# ─────────────────────────────────────────────
+# Main Agent Dispatcher
+# ─────────────────────────────────────────────
+
+def run_agent(user_message: str, conversation_history: list[dict]) -> str:
+    """
+    Run the tool-calling agent loop with automatic LLM provider routing.
+
+    - If LLM_PROVIDER=grok/xai -> use xAI Grok via OpenAI-compatible API
+    - If LLM_PROVIDER=anthropic/claude -> use Anthropic Claude
+    - If LLM_PROVIDER=auto (default) -> auto-detect based on available keys
+    - If no valid keys -> use intelligent local fallback BI agent
+
+    conversation_history: list of {"role": "user"/"assistant", "content": "..."}
+    Returns final text response as string.
+
+    Flow:
+    1. Detect provider
+    2. Send user message + history to LLM
+    3. If LLM returns tool_use / tool_calls → execute tool → feed result back → repeat
+    4. When LLM returns final text → return it
+    """
+    provider = _get_llm_provider()
+
+    if provider == "mock":
+        print("[agent] Mock AI mode active (no valid ANTHROPIC_API_KEY / XAI_API_KEY). Using local fallback BI agent.")
+        return _local_fallback_agent(user_message, conversation_history)
+
+    if provider == "grok":
+        print(f"[agent] Using xAI Grok (model={os.getenv('XAI_MODEL') or os.getenv('GROK_MODEL') or 'grok-3'})")
+        return _run_grok_agent(user_message, conversation_history)
+
+    # Default: anthropic
+    print(f"[agent] Using Anthropic Claude (model={os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022')})")
+    return _run_claude_agent(user_message, conversation_history)
+
