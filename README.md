@@ -1,5 +1,6 @@
 # 🚀 Skylark BI Agent
 
+
 > **Stack**: [monday.com](http://monday.com) → FastAPI → Claude **/ Grok (xAI)** Tool-Calling Agent → Streamlit → Deploy on Streamlit Cloud
 
 Skylark BI Agent is a full-stack conversational Business Intelligence assistant built for **Skylark Drones**. It connects to live **Deals/Pipeline** and **Work Orders/Execution** boards on monday.com, normalizes and validates data quality, and uses **Anthropic Claude** *or* **xAI Grok** tool-calling APIs to answer executive and operational questions with actionable business insights and data quality caveats.
