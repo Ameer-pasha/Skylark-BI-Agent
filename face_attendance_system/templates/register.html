@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+{% block title %}Register Student · Smart Attendance{% endblock %}
+{% block heading %}Register Student{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 gap-6 xl:grid-cols-5">
+  <!-- ═══ Camera / upload panel ═══ -->
+  <div class="card p-6 xl:col-span-3">
+    <div class="mb-4 flex items-center justify-between">
+      <h3 class="text-base font-bold">Student Photo</h3>
+      <div class="flex rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+        <button id="tab-camera" class="rounded-lg px-3 py-1.5 text-xs font-bold transition-all">📷 Camera</button>
+        <button id="tab-upload" class="rounded-lg px-3 py-1.5 text-xs font-bold transition-all">🖼️ Upload</button>
+      </div>
+    </div>
+
+    <!-- Camera mode -->
+    <div id="camera-panel">
+      <div id="camera-box" class="relative overflow-hidden rounded-2xl border-2 border-dashed border-slate-300 dark:border-slate-700 bg-slate-900" style="aspect-ratio: 4/3;">
+        <video id="camera-video" class="h-full w-full object-cover" autoplay playsinline muted></video>
+        <div class="camera-flash" id="camera-flash"></div>
+        <div id="camera-placeholder" class="absolute inset-0 grid place-items-center text-center text-slate-400">
+          <div>
+            <p class="text-sm font-medium">Camera off</p>
+            <p class="text-xs">Click "Start Camera" to capture a photo</p>
+          </div>
+        </div>
+        <div id="capturing-overlay" class="absolute inset-0 hidden flex-col items-center justify-center gap-3 bg-black/60 backdrop-blur-sm">
+          <div class="spinner text-white"></div>
+          <p class="text-sm font-bold text-white">Capturing…</p>
+        </div>
+      </div>
+      <div class="mt-4 flex flex-wrap gap-3">
+        <button id="btn-start-cam" class="btn btn-primary">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          Start Camera
+        </button>
+        <button id="btn-capture" class="btn btn-ghost" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.2 4.2l2.8 2.8M17 17l2.8 2.8M1 12h4M19 12h4M4.2 19.8L7 17M17 7l2.8-2.8"/></svg>
+          Capture
+        </button>
+      </div>
+    </div>
+
+    <!-- Upload mode -->
+    <div id="upload-panel" class="hidden">
+      <label for="file-input" id="drop-zone"
+        class="group flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50/60 p-10 text-center transition-all duration-200 hover:border-indigo-400 hover:bg-indigo-50/40 dark:border-slate-700 dark:bg-slate-900/40 dark:hover:border-indigo-500 dark:hover:bg-slate-900">
+        <div class="grid h-14 w-14 place-items-center rounded-2xl bg-indigo-500/10 text-indigo-500 transition-transform duration-200 group-hover:scale-110">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </div>
+        <p class="text-sm font-semibold text-slate-600 dark:text-slate-300">Drop a photo here, or <span class="text-indigo-500">browse</span></p>
+        <p class="text-xs text-slate-400">PNG, JPG or WEBP · single, clear face</p>
+      </label>
+      <input type="file" id="file-input" accept="image/*" class="hidden" />
+    </div>
+
+    <!-- Frozen preview -->
+    <div id="preview-panel" class="hidden">
+      <div class="relative overflow-hidden rounded-2xl" style="aspect-ratio: 4/3;">
+        <img id="preview-img" class="h-full w-full object-cover" alt="preview" />
+        <div id="preview-corners">
+          <span class="corner tl"></span><span class="corner tr"></span>
+          <span class="corner bl"></span><span class="corner br"></span>
+        </div>
+      </div>
+      <div class="mt-4 flex gap-3">
+        <button id="btn-retake" class="btn btn-ghost">Retake</button>
+        <span class="self-center text-xs text-slate-400">Ready to register</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Form ═══ -->
+  <div class="card p-6 xl:col-span-2">
+    <h3 class="mb-5 text-base font-bold">Student Details</h3>
+    <form id="register-form" class="space-y-4" autocomplete="off">
+      <div>
+        <label class="label" for="name">Full Name</label>
+        <input id="name" class="input" type="text" placeholder="e.g. Aisha Khan" required />
+      </div>
+      <div>
+        <label class="label" for="roll_no">Roll Number</label>
+        <input id="roll_no" class="input" type="text" placeholder="e.g. CS-2024-011" required />
+      </div>
+      <div>
+        <label class="label" for="class_section">Class / Section</label>
+        <input id="class_section" class="input" type="text" placeholder="e.g. 10-A" required />
+      </div>
+
+      <div id="hint-box" class="rounded-xl bg-indigo-500/5 p-3 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+        💡 Tips for best accuracy: face the camera directly, good lighting,
+        and make sure only <b>one face</b> is visible.
+      </div>
+
+      <button type="submit" id="btn-submit" class="btn btn-primary w-full !py-3" disabled>
+        <span id="submit-label">Register Student</span>
+        <span id="submit-spinner" class="hidden spinner text-white !h-4 !w-4"></span>
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.body.dataset.page = "register";
+
+const els = {
+  tabCamera: document.getElementById("tab-camera"),
+  tabUpload: document.getElementById("tab-upload"),
+  cameraPanel: document.getElementById("camera-panel"),
+  uploadPanel: document.getElementById("upload-panel"),
+  video: document.getElementById("camera-video"),
+  placeholder: document.getElementById("camera-placeholder"),
+  flash: document.getElementById("camera-flash"),
+  capturing: document.getElementById("capturing-overlay"),
+  startCam: document.getElementById("btn-start-cam"),
+  capture: document.getElementById("btn-capture"),
+  fileInput: document.getElementById("file-input"),
+  dropZone: document.getElementById("drop-zone"),
+  previewPanel: document.getElementById("preview-panel"),
+  previewImg: document.getElementById("preview-img"),
+  retake: document.getElementById("btn-retake"),
+  form: document.getElementById("register-form"),
+  submit: document.getElementById("btn-submit"),
+  submitLabel: document.getElementById("submit-label"),
+  submitSpinner: document.getElementById("submit-spinner"),
+};
+
+let stream = null;
+let capturedImage = null; // data URL ready to submit
+
+/* ── Tabs ── */
+function setTab(which) {
+  const isCam = which === "camera";
+  els.tabCamera.className = "rounded-lg px-3 py-1.5 text-xs font-bold transition-all " +
+    (isCam ? "bg-white text-indigo-600 shadow dark:bg-slate-900" : "text-slate-500");
+  els.tabUpload.className = "rounded-lg px-3 py-1.5 text-xs font-bold transition-all " +
+    (!isCam ? "bg-white text-indigo-600 shadow dark:bg-slate-900" : "text-slate-500");
+  els.cameraPanel.classList.toggle("hidden", !isCam);
+  els.uploadPanel.classList.toggle("hidden", isCam);
+}
+els.tabCamera.addEventListener("click", () => setTab("camera"));
+els.tabUpload.addEventListener("click", () => setTab("upload"));
+
+/* ── Camera ── */
+els.startCam.addEventListener("click", async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: 640, height: 480 }, audio: false });
+    els.video.srcObject = stream;
+    els.placeholder.classList.add("hidden");
+    els.capture.disabled = false;
+    els.startCam.disabled = true;
+    els.startCam.innerHTML = "Camera on";
+    App.toast("Camera started", "success");
+  } catch (err) {
+    App.toast("Camera access denied or unavailable: " + err.message, "error");
+  }
+});
+
+els.capture.addEventListener("click", () => {
+  els.capturing.classList.remove("hidden");
+  els.capturing.classList.add("flex");
+  els.flash.classList.remove("on");
+  void els.flash.offsetWidth; // restart animation
+  els.flash.classList.add("on");
+
+  setTimeout(() => {
+    const canvas = document.createElement("canvas");
+    const vw = els.video.videoWidth || 640;
+    const vh = els.video.videoHeight || 480;
+    canvas.width = vw; canvas.height = vh;
+    canvas.getContext("2d").drawImage(els.video, 0, 0, vw, vh);
+    capturedImage = canvas.toDataURL("image/jpeg", 0.92);
+    els.previewImg.src = capturedImage;
+    els.previewPanel.classList.remove("hidden");
+    els.cameraPanel.classList.add("hidden");
+    els.uploadPanel.classList.add("hidden");
+    els.capturing.classList.add("hidden");
+    els.capturing.classList.remove("flex");
+    els.submit.disabled = false;
+    App.toast("Photo captured — review and register", "info");
+  }, 550);
+});
+
+/* ── Upload ── */
+els.dropZone.addEventListener("dragover", (e) => { e.preventDefault(); els.dropZone.classList.add("border-indigo-400"); });
+els.dropZone.addEventListener("dragleave", () => els.dropZone.classList.remove("border-indigo-400"));
+els.dropZone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  els.dropZone.classList.remove("border-indigo-400");
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+els.fileInput.addEventListener("change", () => { if (els.fileInput.files.length) handleFile(els.fileInput.files[0]); });
+
+function handleFile(file) {
+  if (!file.type.startsWith("image/")) { App.toast("Please choose an image file", "error"); return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    capturedImage = reader.result;
+    els.previewImg.src = capturedImage;
+    els.previewPanel.classList.remove("hidden");
+    els.cameraPanel.classList.add("hidden");
+    els.uploadPanel.classList.add("hidden");
+    els.submit.disabled = false;
+  };
+  reader.readAsDataURL(file);
+}
+
+els.retake.addEventListener("click", () => {
+  capturedImage = null;
+  els.previewPanel.classList.add("hidden");
+  els.submit.disabled = true;
+  setTab("camera");
+  els.cameraPanel.classList.remove("hidden");
+  els.uploadPanel.classList.add("hidden");
+});
+
+/* ── Submit ── */
+els.form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!capturedImage) { App.toast("Capture or upload a photo first", "warning"); return; }
+
+  const payload = {
+    name: document.getElementById("name").value.trim(),
+    roll_no: document.getElementById("roll_no").value.trim(),
+    class_section: document.getElementById("class_section").value.trim(),
+    image: capturedImage,
+  };
+
+  els.submit.disabled = true;
+  els.submitSpinner.classList.remove("hidden");
+  els.submitLabel.textContent = "Registering…";
+
+  try {
+    const res = await App.apiFetch("/api/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    App.toast(res.message || "Student registered", "success");
+    els.form.reset();
+    capturedImage = null;
+    els.previewPanel.classList.add("hidden");
+    setTab("camera");
+    els.cameraPanel.classList.remove("hidden");
+    els.uploadPanel.classList.add("hidden");
+    els.submit.disabled = true;
+  } catch (err) {
+    App.toast(err.message, "error");
+  } finally {
+    els.submitSpinner.classList.add("hidden");
+    els.submitLabel.textContent = "Register Student";
+    els.submit.disabled = !capturedImage;
+  }
+});
+
+/* Clean up camera on page unload */
+window.addEventListener("beforeunload", () => {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+});
+</script>
+{% endblock %}

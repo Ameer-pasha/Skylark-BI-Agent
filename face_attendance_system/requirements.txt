@@ -1,0 +1,24 @@
+# Smart Attendance System — Python 3.10 / 3.11
+flask==3.0.3
+flask-sqlalchemy==3.1.1
+flask-cors==4.0.1
+numpy==1.26.4
+onnxruntime==1.19.2
+opencv-python-headless==4.10.0.84
+# ── InsightFace runtime deps (installed explicitly; insightface itself is
+#    patched at install time to skip its C++ 3D-mesh extension) ──
+onnx==1.16.1
+scipy==1.13.1
+scikit-image==0.24.0
+scikit-learn==1.5.1
+easydict==1.13
+requests==2.32.3
+tqdm==4.66.4
+matplotlib==3.9.2
+prettytable==3.11.0
+cython==3.0.11
+# insightface==0.7.3  → install via scripts/install_insightface.sh
+pandas==2.2.2
+pillow==10.4.0
+python-dotenv==1.0.1
+openpyxl==3.1.5
